@@ -13,11 +13,11 @@ RUN [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tl
 # Verify Python installation
 RUN python --version
 
-# Set the working directory in the container
+# Set the working directory
 WORKDIR /app
 
-# Copy the current directory contents into the container at /app
+# Copy application files
 COPY . /app
 
-# Run app.py when the container launches
+# Set the startup command
 CMD ["python", "app.py"]

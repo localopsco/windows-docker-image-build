@@ -1,137 +1,26 @@
-name: Build and Push Windows Python Docker Image
+name: Build Windows Docker Image
 
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
-env:
-  # Set your Docker image name here (repository/image-name)
-  DOCKER_IMAGE: ${{ github.repository_owner }}/windows-python
-  # Registry url
-  REGISTRY: docker.io
-
 jobs:
-  build-and-push:
+  build:
     runs-on: windows-latest
-    permissions:
-      contents: read
-      packages: write
-      pull-requests: write
-      statuses: write
-
+    environment: prod
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    # Configure Docker for Windows
-    - name: Set up Docker for Windows
-      shell: powershell
-      run: |
-        $ErrorActionPreference = 'Stop'
-        $ProgressPreference = 'SilentlyContinue'
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-        # Switch to Windows containers
-        & $Env:ProgramFiles\Docker\Docker\DockerCli.exe -SwitchDaemon
-
-        # Wait for Docker to be ready
-        Start-Sleep -s 10
-        docker version
-
-    # Login to Docker Hub (only if we're pushing)
-    - name: Login to Docker Hub
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    # Extract metadata for tagging
-    - name: Extract Docker metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.DOCKER_IMAGE }}
-        tags: |
-          type=raw,value=latest,enable={{is_default_branch}}
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=sha,format=long
-        labels: |
-          org.opencontainers.image.title=Windows Python Application
-          org.opencontainers.image.description=Python application running in Windows container
-          org.opencontainers.image.vendor=${{ github.repository_owner }}
-          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          org.opencontainers.image.version=${{ github.ref_name }}
-          org.opencontainers.image.revision=${{ github.sha }}
-
-    # Build and push using native Docker commands
-    - name: Build and push Docker image
-      shell: powershell
-      env:
-        TAGS: ${{ steps.meta.outputs.tags }}
-      run: |
-        $ErrorActionPreference = 'Stop'
-
-        # Build the image
-        docker build --label "${{ steps.meta.outputs.labels }}" -t "${{ env.DOCKER_IMAGE }}:latest" .
-
-        # If not a PR, tag and push all versions
-        if ('${{ github.event_name }}' -ne 'pull_request') {
-          $tags = '${{ steps.meta.outputs.tags }}' -split "`n"
-          foreach ($tag in $tags) {
-            if ($tag) {
-              Write-Host "Tagging and pushing: $tag"
-              $imageId = docker images "${{ env.DOCKER_IMAGE }}:latest" --quiet
-              docker tag $imageId $tag
-              docker push $tag
-            }
-          }
-        }
-
-    # Report build status on PR
-    - name: Report Status
-      if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const { owner, repo } = context.repo;
-          const run_id = context.runId;
-          const run_link = `https://github.com/${owner}/${repo}/actions/runs/${run_id}`;
-          const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
-          const tags = `${{ steps.meta.outputs.tags }}`.split('\n').filter(Boolean).join(', ');
-
-          let message = `## 🐳 Windows Docker Build Status: ${status}\n\n`;
-          message += `- **Build URL**: [View Run](${run_link})\n`;
-          message += `- **Image Tags**: ${tags}\n`;
-
-          if ('${{ job.status }}' === 'success') {
-            message += `\nYou can pull this image with:\n\`\`\`bash\ndocker pull ${tags.split(', ')[0]}\n\`\`\``;
-          }
-
-          await github.rest.issues.createComment({
-            owner,
-            repo,
-            issue_number: context.issue.number,
-            body: message
-          });
-
-    # Optional: Scan the image for vulnerabilities
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      if: github.event_name != 'pull_request'
-      with:
-        image-ref: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
-        format: 'table'
-        exit-code: '1'
-        ignore-unfixed: true
-        vuln-type: 'os,library'
-        severity: 'CRITICAL,HIGH'
+      - name: Build and Push
+        shell: powershell
+        run: |
+          docker build . -t ${{ secrets.DOCKERHUB_USERNAME }}/windows-python:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/windows-python:latest

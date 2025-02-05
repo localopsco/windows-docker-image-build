@@ -51,7 +51,7 @@ This repository uses GitHub Actions to automatically:
 .
 ├── .github/
 │   └── workflows/
-│       └── docker-build.yml
+│       └── build.yaml
 ├── app.py
 ├── requirements.txt
 ├── Dockerfile

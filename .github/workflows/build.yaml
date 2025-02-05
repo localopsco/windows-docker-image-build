@@ -11,9 +11,7 @@ on:
 env:
   # Set your Docker image name here (repository/image-name)
   DOCKER_IMAGE: ${{ github.repository_owner }}/windows-python
-  # Define platforms we want to build for
-  PLATFORMS: windows/amd64
-  # Registry url - useful if you want to switch to ghcr.io or another registry
+  # Registry url
   REGISTRY: docker.io
 
 jobs:
@@ -22,9 +20,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # Required for PR comments
       pull-requests: write
-      # Required for status checks
       statuses: write
 
     steps:
@@ -33,12 +29,21 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      with:
-        platforms: ${{ env.PLATFORMS }}
+    # Configure Docker for Windows
+    - name: Set up Docker for Windows
+      shell: powershell
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
 
-    # Only login if we're pushing (not a PR)
+        # Switch to Windows containers
+        & $Env:ProgramFiles\Docker\Docker\DockerCli.exe -SwitchDaemon
+
+        # Wait for Docker to be ready
+        Start-Sleep -s 10
+        docker version
+
+    # Login to Docker Hub (only if we're pushing)
     - name: Login to Docker Hub
       if: github.event_name != 'pull_request'
       uses: docker/login-action@v3
@@ -47,23 +52,18 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Extract metadata for Docker
+    # Extract metadata for tagging
+    - name: Extract Docker metadata
       id: meta
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.DOCKER_IMAGE }}
         tags: |
-          # Set latest tag for main branch
           type=raw,value=latest,enable={{is_default_branch}}
-          # Tag with branch name (e.g., main, feature-*)
           type=ref,event=branch
-          # Tag with PR number (e.g., pr-13)
           type=ref,event=pr
-          # Tag with semantic version (e.g., v1.0.0)
           type=semver,pattern={{version}}
-          # Tag with major.minor version (e.g., v1.0)
           type=semver,pattern={{major}}.{{minor}}
-          # Tag with git SHA
           type=sha,format=long
         labels: |
           org.opencontainers.image.title=Windows Python Application
@@ -71,31 +71,33 @@ jobs:
           org.opencontainers.image.vendor=${{ github.repository_owner }}
           org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           org.opencontainers.image.version=${{ github.ref_name }}
-          org.opencontainers.image.created=${{ steps.prep.outputs.created }}
           org.opencontainers.image.revision=${{ github.sha }}
 
-    # Set up QEMU for potential multi-arch builds
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
+    # Build and push using native Docker commands
+    - name: Build and push Docker image
+      shell: powershell
+      env:
+        TAGS: ${{ steps.meta.outputs.tags }}
+      run: |
+        $ErrorActionPreference = 'Stop'
 
-    # Build and push the image
-    - name: Build and push
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        platforms: ${{ env.PLATFORMS }}
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        build-args: |
-          VERSION=${{ github.ref_name }}
-          BUILD_DATE=${{ steps.prep.outputs.created }}
-          GIT_SHA=${{ github.sha }}
-          GIT_REF=${{ github.ref }}
+        # Build the image
+        docker build --label "${{ steps.meta.outputs.labels }}" -t "${{ env.DOCKER_IMAGE }}:latest" .
 
-    # Report build result on PR
+        # If not a PR, tag and push all versions
+        if ('${{ github.event_name }}' -ne 'pull_request') {
+          $tags = '${{ steps.meta.outputs.tags }}' -split "`n"
+          foreach ($tag in $tags) {
+            if ($tag) {
+              Write-Host "Tagging and pushing: $tag"
+              $imageId = docker images "${{ env.DOCKER_IMAGE }}:latest" --quiet
+              docker tag $imageId $tag
+              docker push $tag
+            }
+          }
+        }
+
+    # Report build status on PR
     - name: Report Status
       if: always() && github.event_name == 'pull_request'
       uses: actions/github-script@v7
@@ -105,9 +107,9 @@ jobs:
           const run_id = context.runId;
           const run_link = `https://github.com/${owner}/${repo}/actions/runs/${run_id}`;
           const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
-          const tags = `${{ steps.meta.outputs.tags }}`.split('\n').join(', ');
+          const tags = `${{ steps.meta.outputs.tags }}`.split('\n').filter(Boolean).join(', ');
 
-          let message = `## 🐳 Docker Build Status: ${status}\n\n`;
+          let message = `## 🐳 Windows Docker Build Status: ${status}\n\n`;
           message += `- **Build URL**: [View Run](${run_link})\n`;
           message += `- **Image Tags**: ${tags}\n`;
 
